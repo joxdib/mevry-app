@@ -589,6 +589,16 @@ table.data tbody tr.clickable:hover { background: #fafaff; }
 .cal-legend { display: flex; gap: 14px; margin-top: 14px; }
 .legend-item { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-2); }
 .legend-item .sw { width: 9px; height: 9px; border-radius: 3px; }
+.cal-content-badge {
+  font-size: 10.5px; font-weight: 500; padding: 3px 8px; border-radius: 6px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  display: flex; align-items: center; gap: 5px;
+}
+.cal-content-badge .dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; flex: 0 0 auto; }
+.content-raw { background: rgba(13,148,136,0.1); color: #0d9488; }
+.content-valeur { background: rgba(124,58,237,0.1); color: #7c3aed; }
+.content-vente { background: rgba(217,119,6,0.1); color: #b45309; }
+.content-coulisses { background: rgba(107,114,128,0.12); color: #6b7280; }
 
 /* =============================================================
    CHARTS / BARRES
@@ -2374,9 +2384,34 @@ function openEditTaskModal(taskId) {
 /* =============================================================
    PAGE — CALENDRIER (nouvel événement + bookings Cal.com)
    ============================================================= */
+const CONTENT_TYPES = ["Raw", "Valeur", "Vente"];
+const CONTENT_TYPE_CLASS = { Raw: "content-raw", Valeur: "content-valeur", Vente: "content-vente", Coulisses: "content-coulisses" };
+const _contentPlanCache = {};
+function contentPlanForYear(year) {
+  if (_contentPlanCache[year]) return _contentPlanCache[year];
+  const map = {};
+  let idx = 0;
+  const daysInYear = Math.round((new Date(year, 11, 31) - new Date(year, 0, 1)) / 86400000) + 1;
+  for (let i = 0; i < daysInYear; i++) {
+    const d = new Date(year, 0, 1 + i);
+    const dow = d.getDay(); // 0=dimanche, 6=samedi
+    const key = toISO(d);
+    if (dow === 6) map[key] = "Coulisses";
+    else if (dow === 0) map[key] = null;
+    else { map[key] = CONTENT_TYPES[idx % 3]; idx++; }
+  }
+  _contentPlanCache[year] = map;
+  return map;
+}
+function contentTypeForDate(dateStr) {
+  const year = parseInt(dateStr.slice(0, 4), 10);
+  return contentPlanForYear(year)[dateStr];
+}
+
 function renderCalendrier() {
   const main = document.getElementById("main");
   let viewYear = TODAY.getFullYear(), viewMonth = TODAY.getMonth();
+  let showContentPlan = false;
 
   function evClass(type) { return type === "rdv" ? "ev-rdv" : type === "deadline" ? "ev-deadline" : type === "tache" ? "ev-tache" : "ev-call"; }
 
@@ -2399,8 +2434,10 @@ function renderCalendrier() {
         const ds = c.other ? null : `${viewYear}-${String(viewMonth + 1).padStart(2, "0")}-${String(c.day).padStart(2, "0")}`;
         const evs = ds ? DB.events.filter(e => e.date === ds) : [];
         const tasksHere = ds ? DB.tasks.filter(t => t.deadline === ds && t.status !== "done") : [];
+        const contentType = (ds && showContentPlan) ? contentTypeForDate(ds) : null;
         return `<div class="cal-cell${c.other ? " other" : ""}${c.today ? " today" : ""}">
           <div class="cal-num">${c.day}</div>
+          ${contentType ? `<div class="cal-content-badge ${CONTENT_TYPE_CLASS[contentType]}"><span class="dot"></span>${contentType}</div>` : ""}
           ${evs.map(e => `<div class="cal-event ${evClass(e.type)}" data-id="${e.id}" title="${esc(e.title)} — clique pour gérer">${esc(e.title)}</div>`).join("")}
           ${tasksHere.map(t => `<div class="cal-event ev-tache" data-task="${t.id}" title="Tâche : ${esc(t.label)} — clique pour gérer">✓ ${esc(t.label)}</div>`).join("")}
         </div>`;
@@ -2465,7 +2502,8 @@ function renderCalendrier() {
     renderTopbar({
       title: "Calendrier",
       subtitle: "Rendez-vous, deadlines et calls — les bookings Cal.com arrivent ici automatiquement",
-      right: `<button class="btn btn-ghost" id="cal-sync-btn">${ICONS.refresh}Sync Cal.com</button>
+      right: `<button class="btn btn-ghost" id="content-plan-btn">${ICONS.zap}Création de contenu</button>
+              <button class="btn btn-ghost" id="cal-sync-btn">${ICONS.refresh}Sync Cal.com</button>
               <button class="btn" id="add-btn">${ICONS.plus}Nouvel événement</button>`,
     }) +
     `<div class="card card-pad">
@@ -2479,19 +2517,31 @@ function renderCalendrier() {
         <button class="btn btn-ghost btn-sm" id="today-btn">Aujourd'hui</button>
       </div>
       <div class="cal-grid" id="cal-grid"></div>
-      <div class="cal-legend">
+      <div class="cal-legend" id="cal-legend">
         <span class="legend-item"><span class="sw" style="background:#6366f1"></span>Rendez-vous</span>
         <span class="legend-item"><span class="sw" style="background:#dc2626"></span>Deadline</span>
         <span class="legend-item"><span class="sw" style="background:#0891b2"></span>Call (Cal.com)</span>
         <span class="legend-item"><span class="sw" style="background:#d97706"></span>Tâche</span>
+        <span class="legend-item content-plan-legend hidden"><span class="sw" style="background:#0d9488"></span>Raw</span>
+        <span class="legend-item content-plan-legend hidden"><span class="sw" style="background:#7c3aed"></span>Valeur</span>
+        <span class="legend-item content-plan-legend hidden"><span class="sw" style="background:#b45309"></span>Vente</span>
+        <span class="legend-item content-plan-legend hidden"><span class="sw" style="background:#6b7280"></span>Coulisses (samedi)</span>
       </div>
     </div>`;
+
+  function updateContentPlanBtn() {
+    const btn = document.getElementById("content-plan-btn");
+    btn.classList.toggle("btn-ghost", !showContentPlan);
+    document.querySelectorAll(".content-plan-legend").forEach(el => el.classList.toggle("hidden", !showContentPlan));
+  }
 
   document.getElementById("prev-month").addEventListener("click", () => { viewMonth--; if (viewMonth < 0) { viewMonth = 11; viewYear--; } buildGrid(); });
   document.getElementById("next-month").addEventListener("click", () => { viewMonth++; if (viewMonth > 11) { viewMonth = 0; viewYear++; } buildGrid(); });
   document.getElementById("today-btn").addEventListener("click", () => { viewYear = TODAY.getFullYear(); viewMonth = TODAY.getMonth(); buildGrid(); });
   document.getElementById("add-btn").addEventListener("click", openNewEventModal);
   document.getElementById("cal-sync-btn").addEventListener("click", () => syncCalcom(false));
+  document.getElementById("content-plan-btn").addEventListener("click", () => { showContentPlan = !showContentPlan; updateContentPlanBtn(); buildGrid(); });
+  updateContentPlanBtn();
   document.getElementById("cal-grid").addEventListener("click", e => {
     const evEl = e.target.closest(".cal-event");
     if (!evEl) return;
