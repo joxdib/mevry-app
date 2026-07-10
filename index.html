@@ -595,9 +595,8 @@ table.data tbody tr.clickable:hover { background: #fafaff; }
   display: flex; align-items: center; gap: 5px;
 }
 .cal-content-badge .dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; flex: 0 0 auto; }
-.content-raw { background: rgba(13,148,136,0.1); color: #0d9488; }
-.content-valeur { background: rgba(124,58,237,0.1); color: #7c3aed; }
-.content-vente { background: rgba(217,119,6,0.1); color: #b45309; }
+.content-educatif { background: rgba(124,58,237,0.1); color: #7c3aed; }
+.content-tips { background: rgba(217,119,6,0.1); color: #b45309; }
 .content-coulisses { background: rgba(107,114,128,0.12); color: #6b7280; }
 
 /* =============================================================
@@ -2384,28 +2383,11 @@ function openEditTaskModal(taskId) {
 /* =============================================================
    PAGE — CALENDRIER (nouvel événement + bookings Cal.com)
    ============================================================= */
-const CONTENT_TYPES = ["Raw", "Valeur", "Vente"];
-const CONTENT_TYPE_CLASS = { Raw: "content-raw", Valeur: "content-valeur", Vente: "content-vente", Coulisses: "content-coulisses" };
-const _contentPlanCache = {};
-function contentPlanForYear(year) {
-  if (_contentPlanCache[year]) return _contentPlanCache[year];
-  const map = {};
-  let idx = 0;
-  const daysInYear = Math.round((new Date(year, 11, 31) - new Date(year, 0, 1)) / 86400000) + 1;
-  for (let i = 0; i < daysInYear; i++) {
-    const d = new Date(year, 0, 1 + i);
-    const dow = d.getDay(); // 0=dimanche, 6=samedi
-    const key = toISO(d);
-    if (dow === 6) map[key] = "Coulisses";
-    else if (dow === 0) map[key] = null;
-    else { map[key] = CONTENT_TYPES[idx % 3]; idx++; }
-  }
-  _contentPlanCache[year] = map;
-  return map;
-}
+const CONTENT_TYPE_CLASS = { "Éducatif": "content-educatif", "Tips": "content-tips", "Coulisses": "content-coulisses" };
+const CONTENT_PLAN_BY_DOW = { 1: "Éducatif", 2: "Tips", 3: "Coulisses", 4: "Éducatif", 5: "Tips", 6: "Coulisses" };
 function contentTypeForDate(dateStr) {
-  const year = parseInt(dateStr.slice(0, 4), 10);
-  return contentPlanForYear(year)[dateStr];
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return CONTENT_PLAN_BY_DOW[new Date(y, m - 1, d).getDay()] || null;
 }
 
 function renderCalendrier() {
@@ -2522,17 +2504,12 @@ function renderCalendrier() {
         <span class="legend-item"><span class="sw" style="background:#dc2626"></span>Deadline</span>
         <span class="legend-item"><span class="sw" style="background:#0891b2"></span>Call (Cal.com)</span>
         <span class="legend-item"><span class="sw" style="background:#d97706"></span>Tâche</span>
-        <span class="legend-item content-plan-legend hidden"><span class="sw" style="background:#0d9488"></span>Raw</span>
-        <span class="legend-item content-plan-legend hidden"><span class="sw" style="background:#7c3aed"></span>Valeur</span>
-        <span class="legend-item content-plan-legend hidden"><span class="sw" style="background:#b45309"></span>Vente</span>
-        <span class="legend-item content-plan-legend hidden"><span class="sw" style="background:#6b7280"></span>Coulisses (samedi)</span>
       </div>
     </div>`;
 
   function updateContentPlanBtn() {
     const btn = document.getElementById("content-plan-btn");
     btn.classList.toggle("btn-ghost", !showContentPlan);
-    document.querySelectorAll(".content-plan-legend").forEach(el => el.classList.toggle("hidden", !showContentPlan));
   }
 
   document.getElementById("prev-month").addEventListener("click", () => { viewMonth--; if (viewMonth < 0) { viewMonth = 11; viewYear--; } buildGrid(); });
