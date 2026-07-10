@@ -1336,6 +1336,9 @@ function caParClient() {
    (prénom + nom de l'invité) + call au calendrier.
    ============================================================= */
 const CAL_URL_KEY = "mevry_os_calcom_url";
+// URL par défaut du Worker Cloudflare déjà déployé — plus besoin de la recoller à chaque navigateur.
+const DEFAULT_CAL_URL = "https://mevry.joxdib.workers.dev";
+function getCalUrl() { return localStorage.getItem(CAL_URL_KEY) || DEFAULT_CAL_URL; }
 
 const CAL_WORKER_CODE = `export default {
   async fetch(request, env) {
@@ -1352,11 +1355,11 @@ const CAL_WORKER_CODE = `export default {
 };`;
 
 function openCalcomConfig() {
-  const current = localStorage.getItem(CAL_URL_KEY) || "";
+  const current = getCalUrl();
   openModal(`
     <div class="modal-head"><h3>Connecter Cal.com</h3><button class="drawer-close" onclick="closeModal()">${ICONS.close}</button></div>
     <p style="font-size:12px;color:var(--text-2);margin:-8px 0 14px;line-height:1.6;">
-      Gratuit, sans n8n. Un petit proxy Cloudflare Worker garde ta clé au chaud côté serveur et débloque l'accès depuis le navigateur (CORS).
+      Connecté automatiquement H24 sur tous les navigateurs via le Worker Cloudflare déjà déployé. Un petit proxy Cloudflare Worker garde ta clé au chaud côté serveur et débloque l'accès depuis le navigateur (CORS).
     </p>
     <ol style="font-size:12px;color:var(--text);margin:0 0 12px;padding-left:18px;line-height:1.7;">
       <li>Crée un compte gratuit sur <b>dash.cloudflare.com</b> → <b>Workers &amp; Pages</b> → <b>Create Worker</b>.</li>
@@ -1422,8 +1425,7 @@ function calProjectName(b) {
 }
 
 async function syncCalcom(silent) {
-  const url = localStorage.getItem(CAL_URL_KEY);
-  if (!url) { if (!silent) openCalcomConfig(); return; }
+  const url = getCalUrl();
   if (!silent) toast("Synchronisation Cal.com…");
   try {
     const direct = /api\.cal\.com/i.test(url);
@@ -1534,10 +1536,10 @@ function mountApp() {
   document.getElementById("login-screen").classList.add("hidden");
   document.getElementById("app-shell").classList.remove("hidden");
   goTo(homeFor(session.role));
-  if (localStorage.getItem(CAL_URL_KEY)) syncCalcom(true); // sync silencieuse à chaque login
+  syncCalcom(true); // sync silencieuse à chaque login, URL par défaut déjà en place
   if (calcomPollTimer) clearInterval(calcomPollTimer);
   calcomPollTimer = setInterval(() => {
-    if (localStorage.getItem(CAL_URL_KEY)) syncCalcom(true);
+    syncCalcom(true);
   }, 45000); // auto-sync toutes les 45s, aucun clic requis
 }
 function goTo(key) {
@@ -1926,44 +1928,22 @@ function renderClients() {
 /* =============================================================
    NOTIF DISCORD — ping le dev quand un projet passe en "Dev"
    ============================================================= */
-const DISCORD_URL_KEY = "mevry_os_discord_url";
-
 function openDiscordConfig() {
-  const current = localStorage.getItem(DISCORD_URL_KEY) || "";
   openModal(`
     <div class="modal-head"><h3>Connecter Discord</h3><button class="drawer-close" onclick="closeModal()">${ICONS.close}</button></div>
     <p style="font-size:12px;color:var(--text-2);margin:-8px 0 14px;line-height:1.6;">
-      Dès qu'un projet passe dans la colonne <b>Dev</b>, un message est envoyé sur ton serveur Discord.
+      Connecté automatiquement H24 sur tous les navigateurs. Dès qu'un projet passe dans la colonne <b>Dev</b>, un message est envoyé sur le serveur Discord. Le webhook est stocké côté serveur (variable d'environnement Vercel) — rien à recoller nulle part.
     </p>
-    <ol style="font-size:12px;color:var(--text);margin:0 0 12px;padding-left:18px;line-height:1.7;">
-      <li>Sur ton serveur Discord : <b>Paramètres du salon → Intégrations → Webhooks → Nouveau webhook</b>.</li>
-      <li>Choisis le salon (ex. #projets-dev), copie l'<b>URL du webhook</b>.</li>
-      <li>Colle-la ci-dessous.</li>
-    </ol>
-    <div class="field"><label>URL du webhook Discord</label>
-      <input class="input" id="f-discordurl" placeholder="https://discord.com/api/webhooks/…" value="${esc(current)}"></div>
-    <div class="form-error hidden" id="f-err">Colle une URL de webhook Discord valide.</div>
     <div class="modal-foot">
-      ${current ? `<button class="btn btn-ghost btn-danger" id="f-discordremove">Déconnecter</button>` : ""}
-      <button class="btn btn-ghost" onclick="closeModal()">Annuler</button>
-      <button class="btn" id="f-discordsave">Enregistrer</button>
+      <button class="btn btn-ghost" onclick="closeModal()">Fermer</button>
+      <button class="btn" id="f-discordtest">Envoyer un test</button>
     </div>`);
-  document.getElementById("f-discordsave").addEventListener("click", () => {
-    const url = document.getElementById("f-discordurl").value.trim();
-    if (!/^https:\/\/discord(app)?\.com\/api\/webhooks\//i.test(url)) { document.getElementById("f-err").classList.remove("hidden"); return; }
-    localStorage.setItem(DISCORD_URL_KEY, url);
-    closeModal();
+  document.getElementById("f-discordtest").addEventListener("click", () => {
     notifyDiscord({
-      title: "Mevry App connecté",
-      description: "Les projets qui passent en **Dev** apparaîtront ici automatiquement.",
+      title: "Test Mevry App",
+      description: "Connexion Discord opérationnelle ✅",
     });
-    toast("Discord connecté");
-  });
-  const rm = document.getElementById("f-discordremove");
-  if (rm) rm.addEventListener("click", () => {
-    localStorage.removeItem(DISCORD_URL_KEY);
-    closeModal();
-    toast("Discord déconnecté");
+    toast("Message de test envoyé");
   });
 }
 
@@ -1972,8 +1952,6 @@ const DISCORD_BANNER_URL = "https://cdn.discordapp.com/attachments/1013918516853
 const DISCORD_DEV_ROLE_ID = "1522187964430549122";
 
 async function notifyDiscord({ content = "", title, description, fields = [] }) {
-  const url = localStorage.getItem(DISCORD_URL_KEY);
-  if (!url) return;
   const embed = {
     title,
     description,
@@ -1984,7 +1962,7 @@ async function notifyDiscord({ content = "", title, description, fields = [] }) 
     timestamp: new Date().toISOString(),
   };
   try {
-    await fetch(url, {
+    await fetch("/api/discord-notify", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
