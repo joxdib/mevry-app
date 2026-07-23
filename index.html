@@ -595,9 +595,9 @@ table.data tbody tr.clickable:hover { background: #fafaff; }
   display: flex; align-items: center; gap: 5px;
 }
 .cal-content-badge .dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; flex: 0 0 auto; }
-.content-educatif { background: rgba(124,58,237,0.1); color: #7c3aed; }
-.content-tips { background: rgba(217,119,6,0.1); color: #b45309; }
-.content-coulisses { background: rgba(107,114,128,0.12); color: #6b7280; }
+.content-vente { background: rgba(124,58,237,0.1); color: #7c3aed; }
+.content-valeur { background: rgba(217,119,6,0.1); color: #b45309; }
+.content-raw { background: rgba(107,114,128,0.12); color: #6b7280; }
 
 /* =============================================================
    CHARTS / BARRES
@@ -2383,8 +2383,8 @@ function openEditTaskModal(taskId) {
 /* =============================================================
    PAGE — CALENDRIER (nouvel événement + bookings Cal.com)
    ============================================================= */
-const CONTENT_TYPE_CLASS = { "Éducatif": "content-educatif", "Tips": "content-tips", "Coulisses": "content-coulisses" };
-const CONTENT_PLAN_BY_DOW = { 1: "Éducatif", 2: "Tips", 3: "Coulisses", 4: "Éducatif", 5: "Tips", 6: "Coulisses" };
+const CONTENT_TYPE_CLASS = { "Vente (Offre)": "content-vente", "Valeur": "content-valeur", "Raw": "content-raw" };
+const CONTENT_PLAN_BY_DOW = { 1: "Vente (Offre)", 2: "Valeur", 3: "Raw", 4: "Vente (Offre)", 5: "Valeur", 6: "Raw" };
 function contentTypeForDate(dateStr) {
   const [y, m, d] = dateStr.split("-").map(Number);
   return CONTENT_PLAN_BY_DOW[new Date(y, m - 1, d).getDay()] || null;
