@@ -1,0 +1,8 @@
+{
+  "name": "mevry-app",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check api/discord-notify.js && node --check api/cal-bookings.js && node scripts/test-automations.mjs"
+  }
+}

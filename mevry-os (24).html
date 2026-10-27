@@ -79,6 +79,17 @@ ul { margin: 0; padding: 0; list-style: none; }
    ============================================================= */
 .app { display: flex; min-height: 100vh; padding: 12px; gap: 12px; }
 
+.app-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.automation-banner {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+  background: #fff; color: var(--crimson);
+  border: 1px solid rgba(220,38,38,0.28);
+  border-radius: var(--r-xl);
+  padding: 12px 16px;
+  font-size: 12.5px; line-height: 1.45;
+}
+.automation-banner-list { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+
 .sidebar {
   flex: 0 0 var(--side-w);
   width: var(--side-w);
@@ -747,6 +758,7 @@ select.input { appearance: none; background-image: url("data:image/svg+xml,%3Csv
 }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 .toast svg { width: 14px; height: 14px; color: var(--violet-2); }
+.toast.error { background: #3f1212; max-width: min(440px, calc(100vw - 32px)); }
 
 /* =============================================================
    LOGIN
@@ -803,7 +815,10 @@ select.input { appearance: none; background-image: url("data:image/svg+xml,%3Csv
 
   <div class="app hidden" id="app-shell">
     <aside class="sidebar" id="sidebar"></aside>
-    <main class="main-panel" id="main"></main>
+    <div class="app-main">
+      <div id="automation-banner" class="automation-banner hidden" role="alert"></div>
+      <main class="main-panel" id="main"></main>
+    </div>
   </div>
 <script>
 /* =============================================================
@@ -1116,13 +1131,15 @@ function enhanceSelects(root) {
   });
 }
 
-function toast(msg) {
+function toast(msg, opts) {
+  const error = !!(opts && opts.error);
   let el = document.querySelector(".toast");
   if (!el) { el = document.createElement("div"); el.className = "toast"; document.body.appendChild(el); }
-  el.innerHTML = ICONS.check + "<span>" + esc(msg) + "</span>";
+  el.classList.toggle("error", error);
+  el.innerHTML = (error ? "" : ICONS.check) + "<span>" + esc(msg) + "</span>";
   requestAnimationFrame(() => el.classList.add("show"));
   clearTimeout(el._t);
-  el._t = setTimeout(() => el.classList.remove("show"), 2200);
+  el._t = setTimeout(() => el.classList.remove("show"), error ? 6500 : 2200);
 }
 
 /* Drawer */
@@ -1330,68 +1347,78 @@ function caParClient() {
 }
 
 /* =============================================================
-   SYNC CAL.COM (via n8n)
-   Cal.com -> n8n (garde la clé API) -> cette app.
-   L'app fetch l'URL n8n, dédoublonne par uid, crée fiche client
-   (prénom + nom de l'invité) + call au calendrier.
+   SYNC CAL.COM
+   Le navigateur appelle /api/cal-bookings (Vercel). La clé CAL_API_KEY
+   reste côté serveur. On n'interroge plus le worker Cloudflare.
    ============================================================= */
-const CAL_URL_KEY = "mevry_os_calcom_url";
-// URL par défaut du Worker Cloudflare déjà déployé — plus besoin de la recoller à chaque navigateur.
-const DEFAULT_CAL_URL = "https://mevry.joxdib.workers.dev";
-function getCalUrl() { return localStorage.getItem(CAL_URL_KEY) || DEFAULT_CAL_URL; }
+try { localStorage.removeItem("mevry_os_calcom_url"); } catch (e) { /* ancien override navigateur */ }
 
-const CAL_WORKER_CODE = `export default {
-  async fetch(request, env) {
-    const cors = {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, OPTIONS",
-      "Access-Control-Allow-Headers": "*",
-    };
-    if (request.method === "OPTIONS") return new Response(null, { headers: cors });
-    const r = await fetch("https://api.cal.com/v1/bookings?apiKey=" + env.CAL_API_KEY);
-    const body = await r.text();
-    return new Response(body, { status: r.status, headers: { ...cors, "Content-Type": "application/json" } });
-  },
-};`;
+const automationAlerts = {};
+function renderAutomationAlerts() {
+  const el = document.getElementById("automation-banner");
+  if (!el) return;
+  const entries = Object.entries(automationAlerts);
+  if (!entries.length) { el.classList.add("hidden"); el.innerHTML = ""; return; }
+  const rows = entries.map(([, msg]) => `<div>${esc(msg)}</div>`).join("");
+  const retry = automationAlerts.cal ? `<button class="btn btn-ghost btn-sm" type="button" id="automation-retry">Réessayer Cal.com</button>` : "";
+  el.classList.remove("hidden");
+  el.innerHTML = `<div class="automation-banner-list">${rows}</div>${retry}`;
+  const btn = document.getElementById("automation-retry");
+  if (btn) btn.addEventListener("click", () => syncCalcom(false));
+}
+function showAutomationAlert(key, message, opts) {
+  const forceToast = !!(opts && opts.forceToast);
+  const changed = automationAlerts[key] !== message;
+  automationAlerts[key] = message;
+  renderAutomationAlerts();
+  if (forceToast || changed) toast(message, { error: true });
+}
+function clearAutomationAlert(key) {
+  if (!automationAlerts[key]) return;
+  delete automationAlerts[key];
+  renderAutomationAlerts();
+}
+function clearAutomationAlerts() {
+  Object.keys(automationAlerts).forEach(key => delete automationAlerts[key]);
+  renderAutomationAlerts();
+}
+
+let calcomPollTimer = null;
+let calSyncPromise = null;
+function stopCalPoll() {
+  if (calcomPollTimer) { clearInterval(calcomPollTimer); calcomPollTimer = null; }
+}
+function ensureCalPoll() {
+  if (calcomPollTimer) return;
+  calcomPollTimer = setInterval(() => { syncCalcom(true); }, 45000);
+}
 
 function openCalcomConfig() {
-  const current = getCalUrl();
   openModal(`
     <div class="modal-head"><h3>Connecter Cal.com</h3><button class="drawer-close" onclick="closeModal()">${ICONS.close}</button></div>
     <p style="font-size:12px;color:var(--text-2);margin:-8px 0 14px;line-height:1.6;">
-      Connecté automatiquement H24 sur tous les navigateurs via le Worker Cloudflare déjà déployé. Un petit proxy Cloudflare Worker garde ta clé au chaud côté serveur et débloque l'accès depuis le navigateur (CORS).
+      Les bookings passent par Mevry, sur Vercel (<span class="cell-mono">/api/cal-bookings</span>). La clé Cal.com reste dans la variable <b>CAL_API_KEY</b> du projet <b>mevryapp</b> — jamais dans le navigateur, et plus aucun worker Cloudflare.
     </p>
     <ol style="font-size:12px;color:var(--text);margin:0 0 12px;padding-left:18px;line-height:1.7;">
-      <li>Crée un compte gratuit sur <b>dash.cloudflare.com</b> → <b>Workers &amp; Pages</b> → <b>Create Worker</b>.</li>
-      <li>Colle le code ci-dessous dans l'éditeur, puis <b>Deploy</b>.</li>
-      <li>Onglet <b>Settings → Variables</b> : ajoute une variable <b>CAL_API_KEY</b> = ta clé Cal.com (Settings → Developer → API Keys).</li>
-      <li>Copie l'URL du Worker (ex. <span class="cell-mono" style="font-size:11px">https://mevry-cal.xxx.workers.dev</span>) et colle-la ici.</li>
+      <li>Cal.com → <b>Settings → Developer → API keys</b> : crée une clé.</li>
+      <li>Vercel → projet <b>mevryapp</b> → <b>Settings → Environment Variables</b> : ajoute <b>CAL_API_KEY</b> pour Production, Preview et Development.</li>
+      <li>Redéploie mevryapp. Une variable ajoutée après le dernier déploiement n'est pas visible tant que ce n'est pas fait.</li>
     </ol>
-    <div class="field">
-      <label style="display:flex;align-items:center;justify-content:space-between;">Code du Worker
-        <button class="btn btn-ghost btn-sm" id="f-copycode" style="padding:2px 8px;">Copier</button></label>
-      <textarea class="input" id="f-workercode" readonly rows="7" style="font-family:var(--font-mono);font-size:11px;line-height:1.5;resize:vertical;white-space:pre;overflow:auto;">${esc(CAL_WORKER_CODE)}</textarea>
-    </div>
-    <div class="field"><label>URL du Worker Cloudflare</label>
-      <input class="input" id="f-calurl" placeholder="https://mevry-cal.xxx.workers.dev" value="${esc(current)}"></div>
-    <p style="font-size:11px;color:var(--text-3);margin:-6px 0 12px;line-height:1.55;">
-      Astuce : tu peux tester l'URL directement dans ton navigateur — tu dois voir du JSON avec tes bookings.
-    </p>
-    <div class="form-error hidden" id="f-err">Colle une URL valide (https://…).</div>
+    <div class="form-error hidden" id="f-err"></div>
     <div class="modal-foot">
-      <button class="btn btn-ghost" onclick="closeModal()">Annuler</button>
-      <button class="btn" id="f-calsave">Enregistrer & synchroniser</button>
+      <button class="btn btn-ghost" onclick="closeModal()">Fermer</button>
+      <button class="btn" id="f-calsync">Tester la synchronisation</button>
     </div>`);
-  document.getElementById("f-copycode").addEventListener("click", () => {
-    const ta = document.getElementById("f-workercode");
-    navigator.clipboard?.writeText(ta.value).then(() => toast("Code copié"), () => { ta.select(); document.execCommand("copy"); toast("Code copié"); });
-  });
-  document.getElementById("f-calsave").addEventListener("click", () => {
-    const url = document.getElementById("f-calurl").value.trim();
-    if (!/^https?:\/\//i.test(url)) { document.getElementById("f-err").classList.remove("hidden"); return; }
-    localStorage.setItem(CAL_URL_KEY, url);
-    closeModal();
-    syncCalcom(false);
+  document.getElementById("f-calsync").addEventListener("click", async () => {
+    const btn = document.getElementById("f-calsync");
+    const err = document.getElementById("f-err");
+    btn.disabled = true;
+    err.classList.add("hidden");
+    const result = await syncCalcom(false);
+    btn.disabled = false;
+    if (!result || result.ok) { closeModal(); return; }
+    err.textContent = result.error;
+    err.classList.remove("hidden");
   });
 }
 
@@ -1424,19 +1451,41 @@ function calProjectName(b) {
   return null;
 }
 
-async function syncCalcom(silent) {
-  const url = getCalUrl();
-  if (!silent) toast("Synchronisation Cal.com…");
+function extractBookings(json) {
+  if (Array.isArray(json)) return json;
+  if (json && Array.isArray(json.bookings)) return json.bookings;
+  if (json && Array.isArray(json.data)) return json.data;
+  if (json && json.data && Array.isArray(json.data.bookings)) return json.data.bookings;
+  return null;
+}
+
+async function runCalSync(background) {
+  let res;
   try {
-    const direct = /api\.cal\.com/i.test(url);
-    const res = await fetch(url, { cache: "no-store", headers: direct ? { "cal-api-version": "2024-08-13" } : {} });
-    const json = await res.json();
-    let bookings = Array.isArray(json) ? json
-      : Array.isArray(json.data) ? json.data
-      : (json.data && Array.isArray(json.data.bookings)) ? json.data.bookings
-      : Array.isArray(json.bookings) ? json.bookings : [];
-    let newClients = 0, newCalls = 0, failed = 0, matchedExisting = 0, newProjects = 0;
-    bookings.forEach(b => {
+    res = await fetch("/api/cal-bookings", { cache: "no-store" });
+  } catch (err) {
+    const error = "Sync Cal.com impossible — le serveur n'a pas répondu.";
+    stopCalPoll();
+    showAutomationAlert("cal", error, { forceToast: !background });
+    return { ok: false, error };
+  }
+  let json = null;
+  try { json = await res.json(); } catch (e) { json = null; }
+  if (!res.ok) {
+    const error = (json && (json.message || json.error)) || ("Sync Cal.com impossible (HTTP " + res.status + ").");
+    stopCalPoll();
+    showAutomationAlert("cal", error, { forceToast: !background });
+    return { ok: false, error };
+  }
+  const bookings = extractBookings(json);
+  if (!bookings) {
+    const error = "Sync Cal.com impossible — réponse inattendue.";
+    stopCalPoll();
+    showAutomationAlert("cal", error, { forceToast: !background });
+    return { ok: false, error };
+  }
+  let newClients = 0, newCalls = 0, failed = 0, matchedExisting = 0, newProjects = 0;
+      bookings.forEach(b => {
       try {
         if (!b || !b.uid) return;
         const status = (b.status || "").toLowerCase();
@@ -1487,15 +1536,22 @@ async function syncCalcom(silent) {
         failed++; // une réservation malformée ne doit jamais bloquer les autres
       }
     });
-    if (newCalls || newClients) { saveDB(); if (currentKey) goTo(currentKey); }
-    if (!silent) {
-      if (newCalls) toast(`Cal.com synchro : ${newCalls} call(s) — ${newClients} nouveau(x) client(s)${newProjects ? `, ${newProjects} projet(s) créé(s)` : ""}${matchedExisting ? `, ${matchedExisting} rattaché(s) à un client existant` : ""}${failed ? ` — ${failed} ignoré(s)` : ""}`);
-      else if (failed) toast(`Sync — ${failed} réservation(s) invalide(s) ignorée(s)`);
-      else toast("Cal.com synchro — rien de nouveau");
-    }
-  } catch (err) {
-    if (!silent) toast("Sync impossible — vérifie l'URL n8n et que le workflow est actif");
+
+  if (newCalls || newClients) { saveDB(); if (currentKey) goTo(currentKey); }
+  clearAutomationAlert("cal");
+  ensureCalPoll();
+  if (newCalls) toast(`Cal.com synchro : ${newCalls} call(s) — ${newClients} nouveau(x) client(s)${newProjects ? `, ${newProjects} projet(s) créé(s)` : ""}${matchedExisting ? `, ${matchedExisting} rattaché(s) à un client existant` : ""}${failed ? ` — ${failed} ignoré(s)` : ""}`);
+  else if (!background) {
+    if (failed) toast(`Sync — ${failed} réservation(s) invalide(s) ignorée(s)`);
+    else toast("Cal.com synchro — rien de nouveau");
   }
+  return { ok: true, newCalls, newClients, newProjects, failed };
+}
+
+function syncCalcom(background) {
+  if (calSyncPromise) return calSyncPromise;
+  calSyncPromise = runCalSync(!!background).finally(() => { calSyncPromise = null; });
+  return calSyncPromise;
 }
 
 /* =============================================================
@@ -1524,23 +1580,20 @@ function getSession() { try { return JSON.parse(localStorage.getItem(STORAGE_KEY
 function logout() {
   localStorage.removeItem(STORAGE_KEY);
   session = null;
-  if (calcomPollTimer) { clearInterval(calcomPollTimer); calcomPollTimer = null; }
+  stopCalPoll();
+  clearAutomationAlerts();
   document.getElementById("app-shell").classList.add("hidden");
   document.getElementById("login-screen").classList.remove("hidden");
   document.getElementById("username").value = "";
   document.getElementById("password").value = "";
 }
 function homeFor(role) { return role === "dev" ? "clients" : "overview"; }
-let calcomPollTimer = null;
 function mountApp() {
   document.getElementById("login-screen").classList.add("hidden");
   document.getElementById("app-shell").classList.remove("hidden");
   goTo(homeFor(session.role));
-  syncCalcom(true); // sync silencieuse à chaque login, URL par défaut déjà en place
-  if (calcomPollTimer) clearInterval(calcomPollTimer);
-  calcomPollTimer = setInterval(() => {
-    syncCalcom(true);
-  }, 45000); // auto-sync toutes les 45s, aucun clic requis
+  stopCalPoll();
+  syncCalcom(true); // un essai au login ; le polling ne repart que si Cal.com répond
 }
 function goTo(key) {
   const nav = NAV[key];
@@ -1932,23 +1985,35 @@ function openDiscordConfig() {
   openModal(`
     <div class="modal-head"><h3>Connecter Discord</h3><button class="drawer-close" onclick="closeModal()">${ICONS.close}</button></div>
     <p style="font-size:12px;color:var(--text-2);margin:-8px 0 14px;line-height:1.6;">
-      Connecté automatiquement H24 sur tous les navigateurs. Dès qu'un projet passe dans la colonne <b>Dev</b>, un message est envoyé sur le serveur Discord. Le webhook est stocké côté serveur (variable d'environnement Vercel) — rien à recoller nulle part.
+      Dès qu'un projet passe dans la colonne <b>Dev</b>, Mevry poste un message via <span class="cell-mono">/api/discord-notify</span>. Le webhook reste dans la variable <b>DISCORD_WEBHOOK_URL</b> du projet Vercel <b>mevryapp</b>.
     </p>
+    <ol style="font-size:12px;color:var(--text);margin:0 0 12px;padding-left:18px;line-height:1.7;">
+      <li>Discord → le salon des devs → <b>Intégrations → Webhooks</b> : copie l'URL.</li>
+      <li>Vercel → projet <b>mevryapp</b> → <b>Environment Variables</b> : ajoute <b>DISCORD_WEBHOOK_URL</b> (Production, Preview, Development).</li>
+      <li>Redéploie, puis envoie un test. Sans cette variable, le bouton affiche l'erreur au lieu d'un succès silencieux.</li>
+    </ol>
+    <div class="form-error hidden" id="f-err"></div>
     <div class="modal-foot">
       <button class="btn btn-ghost" onclick="closeModal()">Fermer</button>
       <button class="btn" id="f-discordtest">Envoyer un test</button>
     </div>`);
-  document.getElementById("f-discordtest").addEventListener("click", () => {
-    notifyDiscord({
+  document.getElementById("f-discordtest").addEventListener("click", async () => {
+    const btn = document.getElementById("f-discordtest");
+    const err = document.getElementById("f-err");
+    btn.disabled = true;
+    err.classList.add("hidden");
+    const result = await notifyDiscord({
       title: "Test Mevry App",
-      description: "Connexion Discord opérationnelle ✅",
+      description: "Connexion Discord opérationnelle.",
     });
-    toast("Message de test envoyé");
+    btn.disabled = false;
+    if (result.ok) { toast("Message de test envoyé sur Discord"); closeModal(); return; }
+    err.textContent = result.error;
+    err.classList.remove("hidden");
   });
 }
 
 const DISCORD_EMBED_COLOR = 5721851; // #574EFB
-const DISCORD_BANNER_URL = "https://cdn.discordapp.com/attachments/1013918516853866602/1034952328803012619/barre-transparent-1-1.png?ex=6a478ab7&is=6a463937&hm=c8ffe859c24dd5a167e0c22ed928fea3a407cccaeffe64db193fa375f1baadaa";
 const DISCORD_DEV_ROLE_ID = "1522187964430549122";
 
 async function notifyDiscord({ content = "", title, description, fields = [] }) {
@@ -1957,12 +2022,12 @@ async function notifyDiscord({ content = "", title, description, fields = [] }) 
     description,
     color: DISCORD_EMBED_COLOR,
     fields,
-    image: { url: DISCORD_BANNER_URL },
     footer: { text: "Mevry App" },
     timestamp: new Date().toISOString(),
   };
+  let res;
   try {
-    await fetch("/api/discord-notify", {
+    res = await fetch("/api/discord-notify", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1971,7 +2036,20 @@ async function notifyDiscord({ content = "", title, description, fields = [] }) 
         allowed_mentions: { roles: [DISCORD_DEV_ROLE_ID] },
       }),
     });
-  } catch (err) { /* silencieux : pas grave si Discord est down */ }
+  } catch (err) {
+    const error = "Discord est injoignable. Réessaie dans un instant.";
+    showAutomationAlert("discord", error, { forceToast: true });
+    return { ok: false, error };
+  }
+  if (!res.ok) {
+    let json = null;
+    try { json = await res.json(); } catch (e) { json = null; }
+    const error = (json && (json.message || json.error)) || ("Notification Discord refusée (HTTP " + res.status + ").");
+    showAutomationAlert("discord", error, { forceToast: true });
+    return { ok: false, error };
+  }
+  clearAutomationAlert("discord");
+  return { ok: true };
 }
 
 function notifyProjectEnteredDev(p) {
